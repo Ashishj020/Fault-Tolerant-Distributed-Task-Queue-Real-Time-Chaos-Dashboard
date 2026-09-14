@@ -1,0 +1,124 @@
+services:
+  rabbitmq:
+    image: rabbitmq:3.13-management-alpine
+    container_name: rabbitmq
+    restart: unless-stopped
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 5s
+      timeout: 8s
+      retries: 12
+      start_period: 10s
+
+  redis:
+    image: redis:7-alpine
+    container_name: redis
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  api:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    container_name: api
+    restart: unless-stopped
+    environment:
+      REDIS_URL: redis://redis:6379/0
+      RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672/
+      MAX_RETRIES: 5
+      BASE_RETRY_DELAY: 2
+      MAX_RETRY_DELAY: 16
+      PREFETCH_COUNT: 1
+      RESULTS_DIR: /data/results
+      WORKER_CONTAINERS: worker-1,worker-2,worker-3
+      CHAOS_RESTART_DELAY: 8
+    ports:
+      - "8010:8000"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - results:/data/results
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 8s
+
+  worker-1: &worker
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    container_name: worker-1
+    command: python -m workers.worker
+    restart: "no"
+    environment:
+      REDIS_URL: redis://redis:6379/0
+      RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672/
+      WORKER_ID: worker-1
+      MAX_RETRIES: 5
+      BASE_RETRY_DELAY: 2
+      MAX_RETRY_DELAY: 16
+      PREFETCH_COUNT: 1
+      RESULTS_DIR: /data/results
+    volumes:
+      - results:/data/results
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      api:
+        condition: service_healthy
+
+  worker-2:
+    <<: *worker
+    container_name: worker-2
+    environment:
+      REDIS_URL: redis://redis:6379/0
+      RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672/
+      WORKER_ID: worker-2
+      MAX_RETRIES: 5
+      BASE_RETRY_DELAY: 2
+      MAX_RETRY_DELAY: 16
+      PREFETCH_COUNT: 1
+      RESULTS_DIR: /data/results
+
+  worker-3:
+    <<: *worker
+    container_name: worker-3
+    environment:
+      REDIS_URL: redis://redis:6379/0
+      RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672/
+      WORKER_ID: worker-3
+      MAX_RETRIES: 5
+      BASE_RETRY_DELAY: 2
+      MAX_RETRY_DELAY: 16
+      PREFETCH_COUNT: 1
+      RESULTS_DIR: /data/results
+
+  frontend:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+    container_name: frontend
+    restart: unless-stopped
+    ports:
+      - "8081:80"
+    depends_on:
+      api:
+        condition: service_healthy
+
+volumes:
+  results:
